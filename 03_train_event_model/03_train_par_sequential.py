@@ -1,6 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 軽量版
 # (Kaggle /working/ ディレクトリ対応)
+# [2025-10-23 修正版：メタデータ設定方法を修正]
 # ==========================================
 import os
 import pandas as pd
@@ -9,30 +10,25 @@ import torch
 from datetime import datetime
 from tqdm import tqdm
 from sdv.sequential import PARSynthesizer
-from sdv.metadata import Metadata
+# ------------------------------------------
+# ⚠️ 修正点： SingleTableMetadata をインポート
+# ------------------------------------------
+from sdv.metadata import SingleTableMetadata
 
 # ------------------------------------------
 # ⚙️ 実行環境に合わせて、以下のパスを設定
 # ------------------------------------------
-
-# environments = "colab" or "kaggle_working"
-ENVIRONMENT = "kaggle_working"  # 👈 Kaggle /working/ 内で実行
+ENVIRONMENT = "kaggle_working" 
 
 if ENVIRONMENT == "kaggle_working":
-    # Kaggleの /kaggle/working/ にクローンした場合
-    # (画像で示されたファイル構造)
     BASE_DIR = "/kaggle/working/synthetic-medical-text-pipeline"
     INPUT_DIR = os.path.join(BASE_DIR, "data/inputs")
     OUTPUT_DIR = os.path.join(BASE_DIR, "data/outputs")
-
 elif ENVIRONMENT == "colab":
-    # Colab や ローカルで実行する場合
     BASE_DIR = "/content/synthetic-medical-text-pipeline"
     INPUT_DIR = os.path.join(BASE_DIR, "data/inputs")
     OUTPUT_DIR = os.path.join(BASE_DIR, "data/outputs")
-    
 else:
-    # (その他の環境)
     INPUT_DIR = "./data/inputs"
     OUTPUT_DIR = "./data/outputs"
 
@@ -119,18 +115,42 @@ training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{times
 training_data.to_csv(training_path, index=False)
 print(f"💾 学習データ保存: {training_path}")
 
+# -----------------------------------------------------------------
 # 3. PARSynthesizer (時系列) モデルの学習
+# -----------------------------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"💡 使用デバイス: {device}")
+print("🧠 PARSynthesizer 用のメタデータを作成中...")
 
-print("🤖 PARSynthesizer 学習開始（シーケンシャル版, EPOCHS=25）...")
 try:
-    entity_columns = ['patient_id']
-    sequence_index = 'date'
+    # -------------------------------------------------
+    # ✅ 修正点： PARモデル用のメタデータ設定
+    # -------------------------------------------------
+    metadata = SingleTableMetadata()
+    metadata.detect_from_dataframe(data=training_data)
     
+    # 1. エンティティ (誰のシーケンスか) を指定
+    metadata.update_column(
+        column_name='patient_id',
+        sdtype='id' # 'object' (str) から 'id' に変更
+    )
+    metadata.set_entity_columns(column_name='patient_id')
+
+    # 2. シーケンスインデックス (何順か) を指定
+    metadata.update_column(
+        column_name='date',
+        sdtype='datetime' # 念のため型を指定
+    )
+    metadata.set_sequence_index(column_name='date')
+    
+    print("✅ メタデータ設定完了。")
+    # print(metadata.to_dict()) # デバッグ用に設定内容を表示
+
+    # -------------------------------------------------
+    
+    print("🤖 PARSynthesizer 学習開始（シーケンシャル版, EPOCHS=25）...")
     model = PARSynthesizer(
-        entity_columns=entity_columns,
-        sequence_index=sequence_index,
+        metadata, # 👈 修正点：メタデータを渡す
         epochs=25,
         batch_size=500,
         verbose=True,
