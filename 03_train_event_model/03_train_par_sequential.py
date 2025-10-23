@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 最終安定版
 # 対応: SDV 1.0.0 / Python 3.10 / Kaggle環境
-# [修正: date を sequence_index に指定]
+# [修正: set_sequence_key() を削除 (SDV 1.x 仕様)]
 # ==========================================
 import os
 import pandas as pd
@@ -134,21 +134,24 @@ print("🧠 メタデータ作成中...")
 metadata = SingleTableMetadata()
 metadata.detect_from_dataframe(training_data)
 
-# 1️⃣ 行ごとのユニークキー (Primary Key)
+# 1️⃣ 主キー (各行ユニーク)
 metadata.update_column("event_id", sdtype="id")
 metadata.set_primary_key("event_id")
 
-# 2️⃣ 患者IDは単なるIDとして扱う (Context)
+# 2️⃣ 患者IDはID列
 metadata.update_column("patient_id", sdtype="id")
 
-# 3️⃣ 時系列軸 (Sequence Index) は date 列
+# 3️⃣ 時系列軸: date
 metadata.update_column("date", sdtype="datetime")
-metadata.set_sequence_index("date")  # 👈 SDV 1.0.0 仕様
+metadata.set_sequence_index("date")  # ✅ 時間軸として設定
 
-# 4️⃣ sequence_order は補助的な数値列
+# 4️⃣ sequence_order は数値列（補助情報）
 metadata.update_column("sequence_order", sdtype="numerical")
 
-print("✅ メタデータ作成完了 (date を sequence_index に設定)")
+# ⚠️ set_sequence_key() は SDV 1.x では使用しない (削除)
+
+print("✅ メタデータ作成完了 (sequence_index=date, sequence_key未設定)")
+
 
 # ------------------------------------------
 # 7. PARSynthesizer 学習 (SDV 1.0.0 仕様)
