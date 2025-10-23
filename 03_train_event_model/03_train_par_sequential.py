@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 軽量版
 # (Kaggle /working/ ディレクトリ対応)
-# [2025-10-23 再々修正版：シーケンス順序番号列を追加]
+# [2025-10-23 最終修正版：sequence_key の sdtype を 'id' に変更]
 # ==========================================
 import os
 import pandas as pd
@@ -101,21 +101,15 @@ if 'patient_id' in merged_df.columns:
 else:
     print("❌ 警告: patient_id が見つかりません。PARSynthesizer は失敗します。")
 
-# -----------------------------------------------------------------
-# ⚠️ 修正点：シーケンス番号（順序）の列を作成
-# -----------------------------------------------------------------
+# シーケンス番号（順序）の列を作成
 print("🗓️ シーケンス順序番号の列 (sequence_order) を作成中...")
-# 1. IDと日付でソート
 training_data = merged_df.sort_values(by=['patient_id', 'date']).copy()
-# 2. ID ごとに 1 から始まる連番を振る
 training_data['sequence_order'] = training_data.groupby('patient_id').cumcount() + 1
 print("✅ シーケンス順序番号の列を作成しました。")
-# -----------------------------------------------------------------
-
 
 print(f"✅ 統合イベント数: {len(training_data):,}")
 print("--- データ型確認 (info) ---")
-print(training_data.info()) # 'sequence_order' (int64) が追加されていることを確認
+print(training_data.info()) 
 print("--------------------------")
 
 training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
@@ -131,7 +125,7 @@ print("🧠 PARSynthesizer 用のメタデータを作成中...")
 
 try:
     # -------------------------------------------------
-    # ✅ 再々修正点： 正しいメソッド名と順序キーを使用
+    # ✅ 最終修正点： sequence_key の sdtype を 'id' に変更
     # -------------------------------------------------
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=training_data)
@@ -144,13 +138,11 @@ try:
     metadata.set_primary_key(column_name='patient_id') 
 
     # 2. シーケンスインデックス (何順か)
-    # ⚠️ 'date' ではなく 'sequence_order' を指定
     metadata.update_column(
         column_name='sequence_order', 
-        sdtype='numerical', # 数値型 (int64)
-        computer_representation='Int64'
+        sdtype='id'  # 👈 修正: 'numerical' ではなく 'id' を指定
     )
-    metadata.set_sequence_key(column_name='sequence_order') # 👈 修正
+    metadata.set_sequence_key(column_name='sequence_order') 
     
     # 3. 'date' 列は通常の datetime として扱う
     metadata.update_column(
