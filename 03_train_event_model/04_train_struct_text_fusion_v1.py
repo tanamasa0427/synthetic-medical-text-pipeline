@@ -1,6 +1,5 @@
 # ==========================================
-# ✅ 構造＋テキスト統合 疑似データ生成パイプライン (SDV 1.x 最終安定版)
-# 対応: Python 3.11 / Kaggle環境 / GitHub連携対応
+# ✅ 構造＋テキスト統合 疑似データ生成パイプライン
 # ==========================================
 
 import os
@@ -10,13 +9,13 @@ from datetime import datetime
 from tqdm import tqdm
 import torch
 from sentence_transformers import SentenceTransformer
-from sdv.sequential import PARSynthesizer
-from sdv.metadata import SingleTableMetadata
+from sdv.timeseries import PARSynthesizer
+from sdv.metadata import Metadata
 
 # ==========================================
 # 初期設定
 # ==========================================
-BASE_DIR = "/kaggle/working/synthetic-medical-text-pipeline"
+BASE_DIR = "/content/synthetic-medical-text-pipeline"
 INPUT_DIR = os.path.join(BASE_DIR, "data/inputs")
 OUTPUT_DIR = os.path.join(BASE_DIR, "data/outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -55,6 +54,7 @@ drug_df = normalize(drug_df, "key_date", "drug")
 struct_df = pd.concat([disease_df, inspection_df, drug_df], ignore_index=True)
 struct_df = struct_df.merge(gender_df, on=["hospital_id", "patient_id"], how="left")
 struct_df = struct_df.sort_values(["patient_id", "date"])
+
 print(f"🧩 構造データ統合完了: {len(struct_df):,}行")
 
 # ==========================================
@@ -62,15 +62,18 @@ print(f"🧩 構造データ統合完了: {len(struct_df):,}行")
 # ==========================================
 print("💬 emr_text埋め込み中...")
 emr_df["date"] = pd.to_datetime(emr_df["emr_date"], errors="coerce")
+
+# 軽量日本語SentenceTransformer（必要に応じて別モデル可）
 embed_model = SentenceTransformer("sonoisa/sentence-bert-base-ja-mean-tokens")
 
 emr_df["embedding"] = emr_df["emr_text"].apply(lambda x: embed_model.encode(str(x), convert_to_numpy=True))
 
+# 平均ベクトルを患者・日付単位で集約（近似結合用）
 emr_embed_df = emr_df.groupby(["patient_id", "date"])["embedding"].apply(
     lambda v: np.mean(np.stack(v), axis=0)
 ).reset_index()
 
-# 構造データに近似マージ（日付差±3日）
+# 構造データに埋め込みを近似マージ（日付差±3日）
 def nearest_merge(struct_df, emr_embed_df, max_days=3):
     out = []
     for pid, group in tqdm(struct_df.groupby("patient_id")):
@@ -105,42 +108,34 @@ emb_df = pd.DataFrame(emb_matrix, columns=emb_cols)
 merged_df = pd.concat([merged_df.drop(columns=["embedding"]), emb_df], axis=1)
 
 # ==========================================
-# メタデータ定義 (SDV 1.x 構成)
+# メタデータ定義
 # ==========================================
-print("🧠 メタデータ作成中...")
-merged_df["event_id"] = range(1, len(merged_df) + 1)
-
-metadata = SingleTableMetadata()
-metadata.detect_from_dataframe(merged_df)
-metadata.update_column("event_id", sdtype="id")
-metadata.set_primary_key("event_id")
-metadata.update_column("patient_id", sdtype="id")
-metadata.set_sequence_key("patient_id")
+metadata = Metadata()
+metadata.detect_table_from_dataframe(table_name="medical_events", data=merged_df)
 metadata.update_column("date", sdtype="datetime")
-print("✅ メタデータ作成完了 (PK=event_id, SK=patient_id)")
+metadata.update_column("event_type", sdtype="categorical")
+metadata.update_column("gender", sdtype="categorical")
 
 # ==========================================
 # PARSynthesizer学習
 # ==========================================
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"💡 使用デバイス: {device}")
-print("🤖 時系列学習開始 (EPOCHS=300)...")
-
+print("🤖 時系列学習開始...")
 model = PARSynthesizer(
-    metadata=metadata,
-    cuda=(device == "cuda"),
-    epochs=300
+    metadata,
+    entity_columns=["patient_id"],
+    sequence_index="date",
+    epochs=300,
+    batch_size=128,
+    verbose=True
 )
 model.fit(merged_df)
-
-model_path = os.path.join(OUTPUT_DIR, f"par_model_struct_text_{timestamp}.pkl")
-model.save(model_path)
-print(f"✅ モデル保存完了: {model_path}")
+model.save(os.path.join(OUTPUT_DIR, f"par_model_struct_text_{timestamp}.pkl"))
+print("✅ 学習完了")
 
 # ==========================================
 # 生成
 # ==========================================
 print("🧬 疑似データ生成中...")
-synthetic_data = model.sample(num_sequences=100)
+synthetic_data = model.sample(num_entities=100)
 synthetic_data.to_csv(os.path.join(OUTPUT_DIR, f"synthetic_struct_text_{timestamp}.csv"), index=False)
 print("🎉 疑似データ生成完了！")
