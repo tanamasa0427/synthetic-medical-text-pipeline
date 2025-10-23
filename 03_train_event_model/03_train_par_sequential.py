@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 軽量版
 # (Kaggle /working/ ディレクトリ対応)
-# [2025-10-23 最終修正版：学習パラメータを .fit() に移動]
+# [2025-10-23 最終修正版：構文エラー修正]
 # ==========================================
 import os
 import pandas as pd
@@ -88,5 +88,92 @@ print(f"🗓️ 日付(date)が NaT の {original_count - len(merged_df):,} 件�
 date_cols = ["disease_date", "inspection_date", "key_date", "emr_date"]
 merged_df = merged_df.drop(columns=[c for c in date_cols if c in merged_df.columns], errors='ignore')
 
+# -------------------------------------------------
+# ⚠️ 構文エラー修正点： pd.to_numeric(...) の行を完全にする
+# -------------------------------------------------
 if 'age' in merged_df.columns:
-    merged_df['age'] = pd.
+    merged_df['age'] = pd.to_numeric(merged_df['age'], errors='coerce').fillna(0)
+
+cat_cols = ['event_type', 'is_suspected', 'admission_status', 'department', 'unit', '採否', 'emr_type', 'hospital_id']
+for col in cat_cols:
+    if col in merged_df.columns:
+        merged_df[col] = merged_df[col].fillna('Unknown').astype('category')
+            
+if 'patient_id' in merged_df.columns:
+    merged_df['patient_id'] = merged_df['patient_id'].astype(str)
+else:
+    print("❌ 警告: patient_id が見つかりません。PARSynthesizer は失敗します。")
+
+# シーケンス番号（順序）の列を作成
+print("🗓️ シーケンス順序番号の列 (sequence_order) を作成中...")
+training_data = merged_df.sort_values(by=['patient_id', 'date']).copy()
+training_data['sequence_order'] = training_data.groupby('patient_id').cumcount() + 1
+print("✅ シーケンス順序番号の列を作成しました。")
+
+print(f"✅ 統合イベント数: {len(training_data):,}")
+print("--- データ型確認 (info) ---")
+print(training_data.info()) 
+print("--------------------------")
+
+training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
+training_data.to_csv(training_path, index=False)
+print(f"💾 学習データ保存: {training_path}")
+
+# -----------------------------------------------------------------
+# 3. PARSynthesizer (時系列) モデルの学習
+# -----------------------------------------------------------------
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"💡 使用デバイス: {device}")
+print("🧠 PARSynthesizer 用のメタデータを作成中...")
+
+try:
+    metadata = SingleTableMetadata()
+    metadata.detect_from_dataframe(data=training_data)
+    
+    # 1. エンティティ (誰のシーケンスか)
+    metadata.update_column(
+        column_name='patient_id',
+        sdtype='id' 
+    )
+    metadata.set_primary_key(column_name='patient_id') 
+
+    # 2. シーケンスインデックス (何順か)
+    metadata.update_column(
+        column_name='sequence_order', 
+        sdtype='id'
+    )
+    metadata.set_sequence_key(column_name='sequence_order') 
+    
+    # 3. 'date' 列は通常の datetime として扱う
+    metadata.update_column(
+        column_name='date',
+        sdtype='datetime'
+    )
+    
+    print("✅ メタデータ設定完了。")
+
+    # -------------------------------------------------
+    
+    print("🤖 PARSynthesizer 学習開始（シーケンス版, EPOCHS=25）...")
+    model = PARSynthesizer(
+        metadata # メタデータを渡す
+    )
+    
+    model.fit(
+        training_data,
+        epochs=25,
+        batch_size=500,
+        verbose=True,
+        device_name=device
+    )
+    
+    # -------------------------------------------------
+    
+    model_path = os.path.join(OUTPUT_DIR, f"par_model_light_{timestamp}.pkl")
+    model.save(model_path)
+    print(f"✅ モデル保存完了: {model_path}")
+
+except Exception as e:
+    print(f"❌ 学習エラー: {e}")
+finally:
+    print("🎉 学習完了！")
