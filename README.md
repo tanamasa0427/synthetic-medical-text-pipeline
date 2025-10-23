@@ -1,1 +1,0 @@
-# synthetic-medical-text-pipeline
