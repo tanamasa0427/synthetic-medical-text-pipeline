@@ -1,6 +1,6 @@
 # ==========================================
-# ✅ PARSynthesizer (時系列) - SDV 0.18.0 安定版
-# 対応: Python 3.10 / Kaggle 環境
+# ✅ PARSynthesizer (時系列) - SDV 1.x 最終安定版
+# 対応: Python 3.11 / Kaggle 環境 (SDV 1.28.0 など)
 # [構文エラー修正済み]
 # ==========================================
 import os
@@ -29,7 +29,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "data/outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-print(f"📦 SDV 0.18.0 PARSynthesizer パイプライン開始: {datetime.now():%Y-%m-%d %H:%M:%S}")
+print(f"📦 SDV 1.x PARSynthesizer パイプライン開始: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
 # ------------------------------------------
 # 1. 安全なCSV読込関数
@@ -118,6 +118,7 @@ merged_df["patient_id"] = merged_df["patient_id"].astype(str)
 # ------------------------------------------
 merged_df = merged_df.sort_values(by=["patient_id", "date"])
 merged_df["sequence_order"] = merged_df.groupby("patient_id").cumcount() + 1
+merged_df["event_id"] = range(1, len(merged_df) + 1) # 一意キー
 
 training_data = merged_df.reset_index(drop=True)
 training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
@@ -125,37 +126,49 @@ training_data.to_csv(training_path, index=False)
 print(f"✅ 学習データ保存完了: {training_path}")
 
 # ------------------------------------------
-# 6. メタデータ作成 (SDV 0.18.0 仕様)
+# 6. メタデータ作成 (SDV 1.x 最終仕様)
 # ------------------------------------------
-print("🧠 メタデータ作成中 (SDV 0.18.0 仕様)...")
+print("🧠 メタデータ作成中 (SDV 1.x 仕様)...")
 metadata = SingleTableMetadata()
 metadata.detect_from_dataframe(training_data)
 
-# Primary Key (エンティティ / グループ化キー)
+# 1️⃣ Primary Key (行のユニークID)
+metadata.update_column("event_id", sdtype="id")
+metadata.set_primary_key("event_id")
+
+# 2️⃣ Sequence Key (グループ化キー)
 metadata.update_column("patient_id", sdtype="id")
-metadata.set_primary_key("patient_id")
+metadata.set_sequence_key("patient_id") # 👈 必須
 
-# Sequence Key (順序キー)
-metadata.update_column("sequence_order", sdtype="id")
-metadata.set_sequence_key("sequence_order")
-
+# 3️⃣ (その他)
 metadata.update_column("date", sdtype="datetime")
+metadata.update_column("sequence_order", sdtype="numerical")
 
-print("✅ メタデータ作成完了 (PK='patient_id', SK='sequence_order')")
+# ⚠️ set_sequence_index() は指定しない
+print("✅ メタデータ作成完了 (PK='event_id', SK='patient_id')")
+
 
 # ------------------------------------------
-# 7. PARSynthesizer 学習 (SDV 0.18.0 仕様)
+# 7. PARSynthesizer 学習 (SDV 1.x 最終仕様)
 # ------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"💡 使用デバイス: {device}")
 
 try:
-    print("🤖 PARSynthesizer 学習開始 (EPOCHS=25, batch_size=500)")
-    model = PARSynthesizer(metadata, cuda=(device == "cuda"))
-    
-    # SDV 0.18.0 では .fit() に epochs と batch_size を渡す
-    model.fit(training_data, epochs=25, batch_size=500)
-    
+    print("🤖 PARSynthesizer 学習開始 (EPOCHS=25)")
+
+    model = PARSynthesizer(
+        metadata=metadata,
+        cuda=(device == "cuda"),
+        epochs=25          # 👈 epochs は __init__
+        # 👈 batch_size は指定しない (自動)
+    )
+
+    # .fit() にはデータのみ渡す
+    model.fit(
+        data=training_data
+    )
+
     model_path = os.path.join(OUTPUT_DIR, f"par_model_light_{timestamp}.pkl")
     model.save(model_path)
     print(f"✅ モデル保存完了: {model_path}")
