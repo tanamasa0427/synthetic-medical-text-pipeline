@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 最終安定版
 # 対応: SDV 1.0.0 / Python 3.10 / Kaggle環境
-# [修正: event_id (PK), patient_id (Sequence Index) を指定]
+# [修正: date を sequence_index に指定]
 # ==========================================
 import os
 import pandas as pd
@@ -114,12 +114,12 @@ if "patient_id" not in merged_df.columns:
 merged_df["patient_id"] = merged_df["patient_id"].astype(str)
 
 # ------------------------------------------
-# 5. シーケンス列作成 (✅ ご提示いただいた修正)
+# 5. シーケンス列作成 (ご提示いただいた設計)
 # ------------------------------------------
 merged_df = merged_df.sort_values(by=["patient_id", "date"])
+# 補助的な順序番号
 merged_df["sequence_order"] = merged_df.groupby("patient_id").cumcount() + 1
-
-# ⚠️ 最終修正点： 行固有の event_id を作成
+# 行固有のユニークID
 merged_df["event_id"] = range(1, len(merged_df) + 1)
 
 training_data = merged_df.reset_index(drop=True)
@@ -134,22 +134,21 @@ print("🧠 メタデータ作成中...")
 metadata = SingleTableMetadata()
 metadata.detect_from_dataframe(training_data)
 
-# ① event_id (新しい一意キー) を Primary Key に
+# 1️⃣ 行ごとのユニークキー (Primary Key)
 metadata.update_column("event_id", sdtype="id")
 metadata.set_primary_key("event_id")
 
-# ② patient_id を Sequence Index (グループ化) に
+# 2️⃣ 患者IDは単なるIDとして扱う (Context)
 metadata.update_column("patient_id", sdtype="id")
-metadata.set_sequence_index("patient_id") # 👈 修正
 
-# ③ sequence_order を Sequence Key (順序) に
-metadata.update_column("sequence_order", sdtype="id")
-metadata.set_sequence_key("sequence_order")
-
-# ④ datetime 列設定
+# 3️⃣ 時系列軸 (Sequence Index) は date 列
 metadata.update_column("date", sdtype="datetime")
+metadata.set_sequence_index("date")  # 👈 SDV 1.0.0 仕様
 
-print("✅ メタデータ作成完了 (event_id を primary key に設定)")
+# 4️⃣ sequence_order は補助的な数値列
+metadata.update_column("sequence_order", sdtype="numerical")
+
+print("✅ メタデータ作成完了 (date を sequence_index に設定)")
 
 # ------------------------------------------
 # 7. PARSynthesizer 学習 (SDV 1.0.0 仕様)
