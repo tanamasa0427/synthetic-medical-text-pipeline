@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 最終安定版
 # 対応: SDV 1.0.0 / Python 3.10 / Kaggle環境
-# [修正: batch_size を削除 (SDV 1.x は自動設定)]
+# [修正: event_id (PK), patient_id (Sequence Index) を指定]
 # ==========================================
 import os
 import pandas as pd
@@ -114,10 +114,13 @@ if "patient_id" not in merged_df.columns:
 merged_df["patient_id"] = merged_df["patient_id"].astype(str)
 
 # ------------------------------------------
-# 5. シーケンス列作成
+# 5. シーケンス列作成 (✅ ご提示いただいた修正)
 # ------------------------------------------
 merged_df = merged_df.sort_values(by=["patient_id", "date"])
 merged_df["sequence_order"] = merged_df.groupby("patient_id").cumcount() + 1
+
+# ⚠️ 最終修正点： 行固有の event_id を作成
+merged_df["event_id"] = range(1, len(merged_df) + 1)
 
 training_data = merged_df.reset_index(drop=True)
 training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
@@ -125,20 +128,28 @@ training_data.to_csv(training_path, index=False)
 print(f"✅ 学習データ保存完了: {training_path}")
 
 # ------------------------------------------
-# 6. メタデータ作成 (✅ 最終安定版)
+# 6. メタデータ作成 (✅ 最終安定版 / ご提示いただいた設計)
 # ------------------------------------------
+print("🧠 メタデータ作成中...")
 metadata = SingleTableMetadata()
 metadata.detect_from_dataframe(training_data)
 
-metadata.update_column("patient_id", sdtype="id")
-metadata.set_primary_key("patient_id")
+# ① event_id (新しい一意キー) を Primary Key に
+metadata.update_column("event_id", sdtype="id")
+metadata.set_primary_key("event_id")
 
+# ② patient_id を Sequence Index (グループ化) に
+metadata.update_column("patient_id", sdtype="id")
+metadata.set_sequence_index("patient_id") # 👈 修正
+
+# ③ sequence_order を Sequence Key (順序) に
 metadata.update_column("sequence_order", sdtype="id")
 metadata.set_sequence_key("sequence_order")
 
+# ④ datetime 列設定
 metadata.update_column("date", sdtype="datetime")
 
-print("✅ メタデータ作成完了")
+print("✅ メタデータ作成完了 (event_id を primary key に設定)")
 
 # ------------------------------------------
 # 7. PARSynthesizer 学習 (SDV 1.0.0 仕様)
@@ -149,17 +160,13 @@ print(f"💡 使用デバイス: {device}")
 try:
     print("🤖 PARSynthesizer 学習開始 (EPOCHS=25)")
     
-    # ------------------------------------------
-    # ⚠️ 最終修正点： (ご提示いただいた通り)
-    # batch_size を削除 (自動設定)
-    # ------------------------------------------
     model = PARSynthesizer(
         metadata=metadata,
         cuda=(device == "cuda"),
         epochs=25          # 👈 epochs は __init__
     )
     
-    # .fit() にはデータのみ渡す
+    # .fit() にはデータのみ渡す (batch_size は自動)
     model.fit(
         data=training_data
     )
