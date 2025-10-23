@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 最終安定版
 # 対応: SDV 1.0.0 / Python 3.10 / Kaggle環境
-# [修正: sequence_key の sdtype を 'id' に変更]
+# [修正: epochs, batch_size を __init__ に渡す (SDV 1.x 仕様)]
 # ==========================================
 import os
 import pandas as pd
@@ -133,9 +133,6 @@ metadata.detect_from_dataframe(training_data)
 metadata.update_column("patient_id", sdtype="id")
 metadata.set_primary_key("patient_id")
 
-# ------------------------------------------
-# ⚠️ 修正点： 'numerical' ではなく 'id' を指定
-# ------------------------------------------
 metadata.update_column("sequence_order", sdtype="id")
 metadata.set_sequence_key("sequence_order")
 
@@ -151,15 +148,23 @@ print(f"💡 使用デバイス: {device}")
 
 try:
     print("🤖 PARSynthesizer 学習開始 (EPOCHS=25)")
+    
+    # ------------------------------------------
+    # ⚠️ 最終修正点： (ご提示いただいた通り)
+    # epochs, batch_size を __init__ に渡す
+    # ------------------------------------------
     model = PARSynthesizer(
         metadata=metadata,
-        cuda=(device == "cuda") # 👈 GPU指定は __init__
+        cuda=(device == "cuda"),
+        epochs=25,
+        batch_size=500
     )
+    
+    # .fit() には学習パラメータを渡さない
     model.fit(
-        data=training_data,
-        epochs=25,          # 👈 epochs は .fit()
-        batch_size=500      # 👈 batch_size は .fit()
+        data=training_data
     )
+    
     model_path = os.path.join(OUTPUT_DIR, f"par_model_light_{timestamp}.pkl")
     model.save(model_path)
     print(f"✅ モデル保存完了: {model_path}")
