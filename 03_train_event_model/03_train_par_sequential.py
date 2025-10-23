@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 軽量版
 # (Kaggle /working/ ディレクトリ対応)
-# [2025-10-23 修正版：メタデータ設定方法を修正]
+# [2025-10-23 再修正版：set_primary_key / set_sequence_key を使用]
 # ==========================================
 import os
 import pandas as pd
@@ -10,9 +10,6 @@ import torch
 from datetime import datetime
 from tqdm import tqdm
 from sdv.sequential import PARSynthesizer
-# ------------------------------------------
-# ⚠️ 修正点： SingleTableMetadata をインポート
-# ------------------------------------------
 from sdv.metadata import SingleTableMetadata
 
 # ------------------------------------------
@@ -36,7 +33,7 @@ else:
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-print(f"📦 SDV PARSynthesizer (時系列) パイプライン | {datetime.now():%Y-%m-%d %H:%M:%S}")
+print(f"📦 SDV PARSynthesizer (時系列) パイプライン | {datetime.now():%Y-%m-%d %H%M:%S}")
 print(f"🔩 環境: {ENVIRONMENT}")
 print(f"📁 入力: {INPUT_DIR}")
 print(f"💾 出力: {OUTPUT_DIR}")
@@ -124,24 +121,26 @@ print("🧠 PARSynthesizer 用のメタデータを作成中...")
 
 try:
     # -------------------------------------------------
-    # ✅ 修正点： PARモデル用のメタデータ設定
+    # ✅ 再修正点： 正しいメソッド名を使用
     # -------------------------------------------------
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=training_data)
     
     # 1. エンティティ (誰のシーケンスか) を指定
+    # (ログより 'patient_id' は 'object' (str) なので 'id' に変更)
     metadata.update_column(
         column_name='patient_id',
-        sdtype='id' # 'object' (str) から 'id' に変更
+        sdtype='id' 
     )
-    metadata.set_entity_columns(column_name='patient_id')
+    metadata.set_primary_key(column_name='patient_id') # 👈 修正
 
     # 2. シーケンスインデックス (何順か) を指定
+    # (ログより 'date' は 'datetime64[ns]' なので sdtype='datetime' を指定)
     metadata.update_column(
         column_name='date',
-        sdtype='datetime' # 念のため型を指定
+        sdtype='datetime'
     )
-    metadata.set_sequence_index(column_name='date')
+    metadata.set_sequence_key(column_name='date') # 👈 修正
     
     print("✅ メタデータ設定完了。")
     # print(metadata.to_dict()) # デバッグ用に設定内容を表示
@@ -150,7 +149,7 @@ try:
     
     print("🤖 PARSynthesizer 学習開始（シーケンシャル版, EPOCHS=25）...")
     model = PARSynthesizer(
-        metadata, # 👈 修正点：メタデータを渡す
+        metadata, # メタデータを渡す
         epochs=25,
         batch_size=500,
         verbose=True,
