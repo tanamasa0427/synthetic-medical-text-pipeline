@@ -1,0 +1,105 @@
+{
+  "version": "1.2",
+  "description": "Clinical structured data schema for synthetic EMR dataset (patient + encounter based design)",
+  "tables": {
+    "patient": {
+      "description": "患者基本情報",
+      "primary_key": "patient_id",
+      "fields": {
+        "patient_id": "str - 患者識別ID（全テーブル共通キー）",
+        "gender": "str - 性別（男 / 女）",
+        "age_group": "str - 年代（例: 55-59歳）",
+        "birth_year": "int - 生年（任意）",
+        "admission_status": "str - 外来 / 入院 / 共通",
+        "primary_department": "str - 主診療科（例: 内科, 外科）",
+        "created_at": "datetime - 登録日時"
+      }
+    },
+    "encounter": {
+      "description": "診療イベント情報（日付単位）",
+      "primary_key": "encounter_id",
+      "fields": {
+        "encounter_id": "str - 診療イベントID（patient_id + encounter_date）",
+        "patient_id": "str - 患者ID（patientとの外部キー）",
+        "encounter_date": "date - 診療日",
+        "department": "str - 診療科",
+        "visit_type": "str - 初診 / 再診 / 定期受診など",
+        "admission_type": "str - 外来 / 入院 / 共通",
+        "note_id": "str - 対応する診療録ID（emr.note_id）",
+        "created_at": "datetime - 登録日時"
+      }
+    },
+    "disease": {
+      "description": "疾患情報（ICD10対応）",
+      "primary_key": ["patient_id", "disease_date", "icd10_code"],
+      "fields": {
+        "patient_id": "str - 患者ID",
+        "encounter_id": "str - 対応する診療イベントID",
+        "disease_date": "date - 診断日",
+        "icd10_code": "str - ICD10コード（例: E143, L039など）",
+        "disease_name": "str - 疾患名（例: 糖尿病網膜症）",
+        "is_suspected": "int - 疑い疾患フラグ（0=確定, 1=疑い）",
+        "admission_type": "str - 外来 / 入院 / 共通",
+        "department": "str - 診療科",
+        "created_at": "datetime - 登録日時"
+      }
+    },
+    "inspection": {
+      "description": "検査データ",
+      "primary_key": ["patient_id", "inspection_date", "inspection_item"],
+      "fields": {
+        "patient_id": "str - 患者ID",
+        "encounter_id": "str - 診療イベントID",
+        "inspection_date": "date - 検査日",
+        "inspection_item": "str - 検査項目名（例: HbA1c(NGSP), CRPなど）",
+        "inspection_value": "float - 検査値（数値または記号）",
+        "unit": "str - 単位（例: %, mg/dL, IU/Lなど）",
+        "admission_type": "str - 外来 / 入院",
+        "department": "str - 診療科",
+        "created_at": "datetime - 登録日時"
+      }
+    },
+    "drug": {
+      "description": "医薬品・処方情報",
+      "primary_key": ["patient_id", "key_date", "yj_code"],
+      "fields": {
+        "patient_id": "str - 患者ID",
+        "encounter_id": "str - 診療イベントID",
+        "key_date": "date - 投薬・調剤日",
+        "yj_code": "str - YJコード（医薬品識別コード）",
+        "drug_name": "str - 医薬品名（例: レザルタス配合錠HD）",
+        "department": "str - 診療科",
+        "admission_type": "str - 外来 / 入院 / 共通",
+        "amount": "float - 投与量",
+        "unit": "str - 投与単位（例: 錠, 本, キット）",
+        "days_count": "int - 投与日数",
+        "extracted_dose": "float - 1回投与量",
+        "daily_dose": "float - 1日投与量",
+        "remarks": "str - 備考（例: 新規処方, 中止予定など）",
+        "created_at": "datetime - 登録日時"
+      }
+    },
+    "emr": {
+      "description": "電子カルテ診療録（自然文）",
+      "primary_key": ["patient_id", "emr_date"],
+      "fields": {
+        "note_id": "str - 一意の診療録ID",
+        "patient_id": "str - 患者ID",
+        "encounter_id": "str - 診療イベントID",
+        "emr_date": "date - 記録日",
+        "emr_type": "str - 記録種別（例: 診療録(医師), 経過記録など）",
+        "emr_text": "str - カルテ本文（SOAP形式や簡潔文）",
+        "note_summary": "str - 概要（短文）",
+        "source": "str - 生成元（例: generated_from_prescription）",
+        "created_at": "datetime - 作成日時"
+      }
+    }
+  },
+  "relations": {
+    "patient_to_encounter": "1:N",
+    "encounter_to_disease": "1:N",
+    "encounter_to_inspection": "1:N",
+    "encounter_to_drug": "1:N",
+    "encounter_to_emr": "1:N"
+  }
+}
