@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 軽量版
 # (Kaggle /working/ ディレクトリ対応)
-# [2025-10-23 最終修正版：構文エラー修正]
+# [2025-10-23 最終修正版：引数をSDV 1.0.0仕様に修正]
 # ==========================================
 import os
 import pandas as pd
@@ -88,9 +88,6 @@ print(f"🗓️ 日付(date)が NaT の {original_count - len(merged_df):,} 件�
 date_cols = ["disease_date", "inspection_date", "key_date", "emr_date"]
 merged_df = merged_df.drop(columns=[c for c in date_cols if c in merged_df.columns], errors='ignore')
 
-# -------------------------------------------------
-# ⚠️ 構文エラー修正点： pd.to_numeric(...) の行を完全にする
-# -------------------------------------------------
 if 'age' in merged_df.columns:
     merged_df['age'] = pd.to_numeric(merged_df['age'], errors='coerce').fillna(0)
 
@@ -151,22 +148,24 @@ try:
     )
     
     print("✅ メタデータ設定完了。")
-
+    # -------------------------------------------------
+    # ⚠️ 最終修正点：
+    # 1. cuda を __init__ に渡す
+    # 2. verbose, device_name を削除
     # -------------------------------------------------
     
-    print("🤖 PARSynthesizer 学習開始（シーケンス版, EPOCHS=25）...")
+    print("🤖 PARSynthesizer 学習開始（シーケンシャル版, EPOCHS=25）...")
     model = PARSynthesizer(
-        metadata # メタデータを渡す
+        metadata, # メタデータを渡す
+        cuda=(device == "cuda") # 👈 GPU指定
     )
     
     model.fit(
         training_data,
         epochs=25,
-        batch_size=500,
-        verbose=True,
-        device_name=device
+        batch_size=500
+        # 👈 verbose と device_name を削除
     )
-    
     # -------------------------------------------------
     
     model_path = os.path.join(OUTPUT_DIR, f"par_model_light_{timestamp}.pkl")
