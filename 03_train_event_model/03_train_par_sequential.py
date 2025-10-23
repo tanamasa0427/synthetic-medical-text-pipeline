@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 最終安定版
 # 対応: SDV 1.0.0 / Python 3.10 / Kaggle環境
-# [修正: set_sequence_key() を削除 (SDV 1.x 仕様)]
+# [修正: sequence_index を未指定 (SDV 1.x バグ回避)]
 # ==========================================
 import os
 import pandas as pd
@@ -114,13 +114,15 @@ if "patient_id" not in merged_df.columns:
 merged_df["patient_id"] = merged_df["patient_id"].astype(str)
 
 # ------------------------------------------
-# 5. シーケンス列作成 (ご提示いただいた設計)
+# 5. シーケンス列作成 (✅ ご提示いただいたワークアラウンド)
 # ------------------------------------------
 merged_df = merged_df.sort_values(by=["patient_id", "date"])
 # 補助的な順序番号
 merged_df["sequence_order"] = merged_df.groupby("patient_id").cumcount() + 1
 # 行固有のユニークID
 merged_df["event_id"] = range(1, len(merged_df) + 1)
+# ⚠️ 最終修正点： 日付を数値化 (SDVバグ回避)
+merged_df["date_order"] = merged_df["date"].map(datetime.toordinal)
 
 training_data = merged_df.reset_index(drop=True)
 training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
@@ -141,17 +143,17 @@ metadata.set_primary_key("event_id")
 # 2️⃣ 患者IDはID列
 metadata.update_column("patient_id", sdtype="id")
 
-# 3️⃣ 時系列軸: date
+# 3️⃣ date は単なる datetime（学習特徴として保持）
 metadata.update_column("date", sdtype="datetime")
-metadata.set_sequence_index("date")  # ✅ 時間軸として設定
 
-# 4️⃣ sequence_order は数値列（補助情報）
+# 4️⃣ 時系列の代わりに数値順序列を追加して擬似的なシーケンス表現に
+metadata.update_column("date_order", sdtype="numerical")
+
+# 5️⃣ sequence_order は数値列（補助情報）
 metadata.update_column("sequence_order", sdtype="numerical")
 
-# ⚠️ set_sequence_key() は SDV 1.x では使用しない (削除)
-
-print("✅ メタデータ作成完了 (sequence_index=date, sequence_key未設定)")
-
+# ⚠️ sequence_index, sequence_key は指定しない (SDV 1.x バグ回避)
+print("✅ メタデータ作成完了 (sequence_index 未指定モード)")
 
 # ------------------------------------------
 # 7. PARSynthesizer 学習 (SDV 1.0.0 仕様)
