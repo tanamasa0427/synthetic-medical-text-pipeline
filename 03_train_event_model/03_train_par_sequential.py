@@ -1,7 +1,7 @@
 # ==========================================
 # ✅ PARSynthesizer (時系列) + 軽量版
 # (Kaggle /working/ ディレクトリ対応)
-# [2025-10-23 再修正版：set_primary_key / set_sequence_key を使用]
+# [2025-10-23 再々修正版：シーケンス順序番号列を追加]
 # ==========================================
 import os
 import pandas as pd
@@ -33,7 +33,7 @@ else:
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-print(f"📦 SDV PARSynthesizer (時系列) パイプライン | {datetime.now():%Y-%m-%d %H%M:%S}")
+print(f"📦 SDV PARSynthesizer (時系列) パイプライン | {datetime.now():%Y-%m-%d %H:%M:%S}")
 print(f"🔩 環境: {ENVIRONMENT}")
 print(f"📁 入力: {INPUT_DIR}")
 print(f"💾 出力: {OUTPUT_DIR}")
@@ -101,11 +101,21 @@ if 'patient_id' in merged_df.columns:
 else:
     print("❌ 警告: patient_id が見つかりません。PARSynthesizer は失敗します。")
 
+# -----------------------------------------------------------------
+# ⚠️ 修正点：シーケンス番号（順序）の列を作成
+# -----------------------------------------------------------------
+print("🗓️ シーケンス順序番号の列 (sequence_order) を作成中...")
+# 1. IDと日付でソート
 training_data = merged_df.sort_values(by=['patient_id', 'date']).copy()
+# 2. ID ごとに 1 から始まる連番を振る
+training_data['sequence_order'] = training_data.groupby('patient_id').cumcount() + 1
+print("✅ シーケンス順序番号の列を作成しました。")
+# -----------------------------------------------------------------
+
 
 print(f"✅ 統合イベント数: {len(training_data):,}")
 print("--- データ型確認 (info) ---")
-print(training_data.info())
+print(training_data.info()) # 'sequence_order' (int64) が追加されていることを確認
 print("--------------------------")
 
 training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
@@ -121,33 +131,39 @@ print("🧠 PARSynthesizer 用のメタデータを作成中...")
 
 try:
     # -------------------------------------------------
-    # ✅ 再修正点： 正しいメソッド名を使用
+    # ✅ 再々修正点： 正しいメソッド名と順序キーを使用
     # -------------------------------------------------
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=training_data)
     
-    # 1. エンティティ (誰のシーケンスか) を指定
-    # (ログより 'patient_id' は 'object' (str) なので 'id' に変更)
+    # 1. エンティティ (誰のシーケンスか)
     metadata.update_column(
         column_name='patient_id',
         sdtype='id' 
     )
-    metadata.set_primary_key(column_name='patient_id') # 👈 修正
+    metadata.set_primary_key(column_name='patient_id') 
 
-    # 2. シーケンスインデックス (何順か) を指定
-    # (ログより 'date' は 'datetime64[ns]' なので sdtype='datetime' を指定)
+    # 2. シーケンスインデックス (何順か)
+    # ⚠️ 'date' ではなく 'sequence_order' を指定
+    metadata.update_column(
+        column_name='sequence_order', 
+        sdtype='numerical', # 数値型 (int64)
+        computer_representation='Int64'
+    )
+    metadata.set_sequence_key(column_name='sequence_order') # 👈 修正
+    
+    # 3. 'date' 列は通常の datetime として扱う
     metadata.update_column(
         column_name='date',
         sdtype='datetime'
     )
-    metadata.set_sequence_key(column_name='date') # 👈 修正
     
     print("✅ メタデータ設定完了。")
     # print(metadata.to_dict()) # デバッグ用に設定内容を表示
 
     # -------------------------------------------------
     
-    print("🤖 PARSynthesizer 学習開始（シーケンシャル版, EPOCHS=25）...")
+    print("🤖 PARSynthesizer 学習開始（シーケンス版, EPOCHS=25）...")
     model = PARSynthesizer(
         metadata, # メタデータを渡す
         epochs=25,
