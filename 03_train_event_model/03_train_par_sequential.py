@@ -1,7 +1,7 @@
 # ==========================================
-# ✅ PARSynthesizer (時系列) + 最終安定版
-# 対応: SDV 1.0.0 / Python 3.10 / Kaggle環境
-# [修正: sequence_index を未指定 (SDV 1.x バグ回避)]
+# ✅ PARSynthesizer (時系列) - SDV 0.18.0 安定版
+# 対応: Python 3.10 / Kaggle 環境
+# [構文エラー修正済み]
 # ==========================================
 import os
 import pandas as pd
@@ -29,7 +29,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "data/outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-print(f"📦 SDV PARSynthesizer (時系列) パイプライン開始: {datetime.now():%Y-%m-%d %H:%M:%S}")
+print(f"📦 SDV 0.18.0 PARSynthesizer パイプライン開始: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
 # ------------------------------------------
 # 1. 安全なCSV読込関数
@@ -53,7 +53,7 @@ drug_df = read_csv_safe(os.path.join(INPUT_DIR, "drug.csv"))
 emr_df = read_csv_safe(os.path.join(INPUT_DIR, "emr.csv"))
 
 # ------------------------------------------
-# 3. 日付列とevent_type列を統一
+# 3. 日付列と event_type 列を統一
 # ------------------------------------------
 def normalize(df, date_col, type_label):
     if df.empty:
@@ -97,32 +97,27 @@ for c in ["disease_date", "inspection_date", "key_date", "emr_date"]:
     if c in merged_df.columns:
         merged_df = merged_df.drop(columns=[c], errors="ignore")
 
-# 年齢列処理
+# 年齢列
 if "age" in merged_df.columns:
     merged_df["age"] = pd.to_numeric(merged_df["age"], errors="coerce").fillna(0)
 
-# カテゴリ列の正規化
+# カテゴリ列正規化
 cat_cols = ['event_type', 'is_suspected', 'admission_status', 'department', 'unit', '採否', 'emr_type', 'hospital_id']
 for col in cat_cols:
     if col in merged_df.columns:
         merged_df[col] = merged_df[col].fillna("Unknown").astype("category")
 
-# patient_id 確認
+# patient_id チェック
 if "patient_id" not in merged_df.columns:
     raise ValueError("❌ 必須列 patient_id が存在しません。")
 
 merged_df["patient_id"] = merged_df["patient_id"].astype(str)
 
 # ------------------------------------------
-# 5. シーケンス列作成 (✅ ご提示いただいたワークアラウンド)
+# 5. シーケンス列作成
 # ------------------------------------------
 merged_df = merged_df.sort_values(by=["patient_id", "date"])
-# 補助的な順序番号
 merged_df["sequence_order"] = merged_df.groupby("patient_id").cumcount() + 1
-# 行固有のユニークID
-merged_df["event_id"] = range(1, len(merged_df) + 1)
-# ⚠️ 最終修正点： 日付を数値化 (SDVバグ回避)
-merged_df["date_order"] = merged_df["date"].map(datetime.toordinal)
 
 training_data = merged_df.reset_index(drop=True)
 training_path = os.path.join(OUTPUT_DIR, f"event_training_data_sequential_{timestamp}.csv")
@@ -130,50 +125,36 @@ training_data.to_csv(training_path, index=False)
 print(f"✅ 学習データ保存完了: {training_path}")
 
 # ------------------------------------------
-# 6. メタデータ作成 (✅ 最終安定版 / ご提示いただいた設計)
+# 6. メタデータ作成 (SDV 0.18.0 仕様)
 # ------------------------------------------
-print("🧠 メタデータ作成中...")
+print("🧠 メタデータ作成中 (SDV 0.18.0 仕様)...")
 metadata = SingleTableMetadata()
 metadata.detect_from_dataframe(training_data)
 
-# 1️⃣ 主キー (各行ユニーク)
-metadata.update_column("event_id", sdtype="id")
-metadata.set_primary_key("event_id")
-
-# 2️⃣ 患者IDはID列
+# Primary Key (エンティティ / グループ化キー)
 metadata.update_column("patient_id", sdtype="id")
+metadata.set_primary_key("patient_id")
 
-# 3️⃣ date は単なる datetime（学習特徴として保持）
+# Sequence Key (順序キー)
+metadata.update_column("sequence_order", sdtype="id")
+metadata.set_sequence_key("sequence_order")
+
 metadata.update_column("date", sdtype="datetime")
 
-# 4️⃣ 時系列の代わりに数値順序列を追加して擬似的なシーケンス表現に
-metadata.update_column("date_order", sdtype="numerical")
-
-# 5️⃣ sequence_order は数値列（補助情報）
-metadata.update_column("sequence_order", sdtype="numerical")
-
-# ⚠️ sequence_index, sequence_key は指定しない (SDV 1.x バグ回避)
-print("✅ メタデータ作成完了 (sequence_index 未指定モード)")
+print("✅ メタデータ作成完了 (PK='patient_id', SK='sequence_order')")
 
 # ------------------------------------------
-# 7. PARSynthesizer 学習 (SDV 1.0.0 仕様)
+# 7. PARSynthesizer 学習 (SDV 0.18.0 仕様)
 # ------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"💡 使用デバイス: {device}")
 
 try:
-    print("🤖 PARSynthesizer 学習開始 (EPOCHS=25)")
+    print("🤖 PARSynthesizer 学習開始 (EPOCHS=25, batch_size=500)")
+    model = PARSynthesizer(metadata, cuda=(device == "cuda"))
     
-    model = PARSynthesizer(
-        metadata=metadata,
-        cuda=(device == "cuda"),
-        epochs=25          # 👈 epochs は __init__
-    )
-    
-    # .fit() にはデータのみ渡す (batch_size は自動)
-    model.fit(
-        data=training_data
-    )
+    # SDV 0.18.0 では .fit() に epochs と batch_size を渡す
+    model.fit(training_data, epochs=25, batch_size=500)
     
     model_path = os.path.join(OUTPUT_DIR, f"par_model_light_{timestamp}.pkl")
     model.save(model_path)
