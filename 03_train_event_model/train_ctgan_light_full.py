@@ -1,5 +1,6 @@
 import os
 import re
+import torch
 import pandas as pd
 from sdv.single_table import CTGANSynthesizer
 from sdv.metadata import SingleTableMetadata
@@ -12,10 +13,20 @@ from sdv.evaluation.single_table import evaluate_quality
 INPUT_PATH = '/kaggle/working/synthetic-medical-text-pipeline/data/inputs'
 OUTPUT_PATH = '/kaggle/working/synthetic-medical-text-pipeline/data/outputs'
 MODEL_NAME = 'ctgan_model_light'
-EPOCHS = 50  # 改良案: 安定化のため少し増加
+EPOCHS = 50  # GPUありなので長めでもOK
+BATCH_SIZE = 500  # VRAM節約のため適度に設定
 
 # ===============================================================
-# 2️⃣ データ読込
+# 2️⃣ デバイス確認
+# ===============================================================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cuda":
+    print(f"💡 使用デバイス: cuda ({torch.cuda.get_device_name(0)})")
+else:
+    print("💡 使用デバイス: cpu（GPUは検出されませんでした）")
+
+# ===============================================================
+# 3️⃣ データ読込
 # ===============================================================
 def load_data():
     files = {
@@ -38,7 +49,7 @@ def load_data():
 dfs = load_data()
 
 # ===============================================================
-# 3️⃣ 製品名の軽い正規化
+# 4️⃣ 製品名の軽い正規化
 # ===============================================================
 def normalize_product_name(name: str) -> str:
     """製品名を軽く正規化（成分変換は行わない）"""
@@ -61,7 +72,7 @@ if 'drug' in dfs:
     print(f"✅ Reduced rare products to 'その他' ({len(rare)} rare items grouped)")
 
 # ===============================================================
-# 4️⃣ 学習データ統合
+# 5️⃣ 学習データ統合
 # ===============================================================
 def merge_all(dfs):
     merged = []
@@ -75,7 +86,7 @@ def merge_all(dfs):
 df_all = merge_all(dfs)
 
 # ===============================================================
-# 5️⃣ Metadata 定義 & トランスフォーマ設定
+# 6️⃣ Metadata 定義 & トランスフォーマ設定
 # ===============================================================
 metadata = SingleTableMetadata()
 metadata.detect_from_dataframe(df_all)
@@ -105,7 +116,7 @@ metadata.update_transformers({
     # --- 薬剤 ---
     'key_date': UnixTimestampEncoder(),
     'yj_code': LabelEncoder(),
-    'drug_name_norm': FrequencyEncoder(),  # 製品名そのまま
+    'drug_name_norm': FrequencyEncoder(),  # 製品名を直接使用
     'amount': None,
     'days_count': None,
     'extracted_number': None,
@@ -118,32 +129,37 @@ metadata.update_transformers({
 })
 
 # ===============================================================
-# 6️⃣ モデル学習
+# 7️⃣ モデル学習
 # ===============================================================
 print("\n🤖 CTGAN training start...")
-synthesizer = CTGANSynthesizer(metadata, epochs=EPOCHS)
+synthesizer = CTGANSynthesizer(
+    metadata,
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
+    cuda=(device == "cuda")  # GPU自動利用
+)
 synthesizer.fit(df_all)
 print("✅ CTGAN training complete.")
 
 # ===============================================================
-# 7️⃣ モデル保存・合成データ生成
+# 8️⃣ モデル保存・合成データ生成
 # ===============================================================
 model_path = os.path.join(OUTPUT_PATH, f"{MODEL_NAME}.pkl")
 synthesizer.save(model_path)
 print(f"✅ Model saved: {model_path}")
 
-synthetic_data = synthesizer.sample(500)  # サンプルを500件生成
+synthetic_data = synthesizer.sample(500)  # 500件のサンプルを生成
 synthetic_path = os.path.join(OUTPUT_PATH, 'synthetic_sample.csv')
 synthetic_data.to_csv(synthetic_path, index=False, encoding='utf-8')
 print(f"🎉 Synthetic sample saved: {synthetic_path}")
 print(synthetic_data.head())
 
 # ===============================================================
-# 8️⃣ Optional改良②：品質評価レポート生成
+# 9️⃣ Optional改良②：品質評価レポート生成
 # ===============================================================
 print("\n📊 Evaluating synthetic data quality...")
 quality_report = evaluate_quality(
-    real_data=df_all.sample(min(1000, len(df_all))),  # 一部を評価用に使用
+    real_data=df_all.sample(min(1000, len(df_all))),  # 一部サンプリングして比較
     synthetic_data=synthetic_data,
     metadata=metadata
 )
