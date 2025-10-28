@@ -1,2 +1,3 @@
 data/outputs/*.csv
 *.pkl
+synthetic_medical_text_pipeline_full_backup/
