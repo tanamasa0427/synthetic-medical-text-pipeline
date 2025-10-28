@@ -1,9 +1,9 @@
 # ===============================================
-# 02_extract_structured_from_emr.py  v3.0
+# 02_extract_structured_from_emr.py  v3.1 (Colab対応)
 # -----------------------------------------------
-# emr_combined_*.csv を入力として、
+# 最新の emr_combined_*.csv を自動検出し、
 # disease / inspection / drug を抽出する。
-# clinical_schema_v1.2.json 準拠
+# Google Colab / Drive 両対応
 # ===============================================
 
 import pandas as pd
@@ -15,13 +15,17 @@ from datetime import datetime
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 MODEL = "models/gemini-2.5-flash"
 
+# ===== Colab環境対応: ディレクトリ作成 =====
+# （このスクリプトを /content/ または /content/drive/... 下で動作させる）
+os.makedirs("../data/outputs", exist_ok=True)
+
 # ===== 入出力パス =====
 INPUT_DIR = "../data/outputs"
 
 # 「emr_combined_*.csv」を自動検出
 csv_files = [f for f in os.listdir(INPUT_DIR) if f.startswith("emr_combined_") and f.endswith(".csv")]
 if not csv_files:
-    raise FileNotFoundError("❌ emr_combined_*.csv が見つかりません。")
+    raise FileNotFoundError(f"❌ emr_combined_*.csv が見つかりません。{os.path.abspath(INPUT_DIR)} を確認してください。")
 
 latest_file = max(csv_files, key=lambda x: os.path.getmtime(os.path.join(INPUT_DIR, x)))
 INPUT_FILE = os.path.join(INPUT_DIR, latest_file)
