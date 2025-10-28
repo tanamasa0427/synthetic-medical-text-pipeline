@@ -1,8 +1,8 @@
 # ===============================================
-# 02_extract_structured_from_dataset.py  v2.2
+# 02_extract_structured_from_emr.py  v3.0
 # -----------------------------------------------
-# dataset_style_v3_*.csv を入力とし、
-# disease / inspection / drug を抽出する
+# emr_combined_*.csv を入力として、
+# disease / inspection / drug を抽出する。
 # clinical_schema_v1.2.json 準拠
 # ===============================================
 
@@ -17,22 +17,25 @@ MODEL = "models/gemini-2.5-flash"
 
 # ===== 入出力パス =====
 INPUT_DIR = "../data/outputs"
-OUTPUT_JSON = os.path.join(INPUT_DIR, f"structured_from_dataset_{datetime.now():%Y%m%d_%H%M%S}.json")
-OUTPUT_DISEASE = os.path.join(INPUT_DIR, f"disease_{datetime.now():%Y%m%d_%H%M%S}.csv")
-OUTPUT_INSPECTION = os.path.join(INPUT_DIR, f"inspection_{datetime.now():%Y%m%d_%H%M%S}.csv")
-OUTPUT_DRUG = os.path.join(INPUT_DIR, f"drug_{datetime.now():%Y%m%d_%H%M%S}.csv")
 
-# ===== 最新 dataset_style ファイルの自動検出 =====
-csv_files = [f for f in os.listdir(INPUT_DIR) if f.startswith("dataset_style_") and f.endswith(".csv")]
+# 「emr_combined_*.csv」を自動検出
+csv_files = [f for f in os.listdir(INPUT_DIR) if f.startswith("emr_combined_") and f.endswith(".csv")]
 if not csv_files:
-    raise FileNotFoundError("❌ dataset_style_*.csv が見つかりません。")
+    raise FileNotFoundError("❌ emr_combined_*.csv が見つかりません。")
 
 latest_file = max(csv_files, key=lambda x: os.path.getmtime(os.path.join(INPUT_DIR, x)))
-dataset_path = os.path.join(INPUT_DIR, latest_file)
-print(f"📄 入力ファイル: {dataset_path}")
+INPUT_FILE = os.path.join(INPUT_DIR, latest_file)
+print(f"📄 入力ファイル: {INPUT_FILE}")
+
+# 出力ファイルを日時付きで同じフォルダに保存
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT_JSON = os.path.join(INPUT_DIR, f"structured_from_emr_{timestamp}.json")
+OUTPUT_DISEASE = os.path.join(INPUT_DIR, f"disease_{timestamp}.csv")
+OUTPUT_INSPECTION = os.path.join(INPUT_DIR, f"inspection_{timestamp}.csv")
+OUTPUT_DRUG = os.path.join(INPUT_DIR, f"drug_{timestamp}.csv")
 
 # ===== データ読み込み =====
-df = pd.read_csv(dataset_path)
+df = pd.read_csv(INPUT_FILE)
 text_column = [c for c in df.columns if "text" in c or "emr" in c][0]
 print(f"✅ {len(df)} 件のカルテ文を読み込みました。")
 
@@ -84,7 +87,7 @@ PROMPT_TEMPLATE = """
 # ===== 出力格納用 =====
 records = []
 
-# ===== メインループ =====
+# ===== メイン処理ループ =====
 for i, row in df.iterrows():
     emr_text = str(row[text_column])
     emr_date = row.get("dispense_date") or row.get("date") or ""
