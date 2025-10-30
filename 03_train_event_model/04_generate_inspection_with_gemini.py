@@ -1,14 +1,14 @@
 # ==============================================================
-# 04_generate_inspection_with_gemini_parallel_v25.py
-# Gemini 2.5対応：並列処理＋キャッシュ＋サンプリング安定版
+# 04_generate_inspection_with_gemini_safe_v25.py
+# 安定版: 小バッチ処理 + キャッシュ + 自動保存
 # ==============================================================
 
 import os
 import json
 import pandas as pd
 import numpy as np
+import time
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
 # --------------------------------------------------------------
@@ -37,14 +37,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # --------------------------------------------------------------
-# CSV読み込み
+# データ読み込み
 # --------------------------------------------------------------
 def load_csv(name):
-    path = f"{INPUT_DIR}/{name}"
-    df = pd.read_csv(path)
+    df = pd.read_csv(f"{INPUT_DIR}/{name}")
     print(f"✅ {name}: {len(df):,}件, 列: {list(df.columns)}")
     return df
-
 
 gender_df = load_csv("gender.csv")
 disease_df = load_csv("disease.csv")
@@ -62,8 +60,8 @@ if os.path.exists(VALUE_RANGES_PATH):
     with open(VALUE_RANGES_PATH, "r") as f:
         value_ranges = json.load(f)
 else:
-    print("⚠️ value_ranges.json が見つかりません。AI生成で代用します。")
     value_ranges = {}
+    print("⚠️ value_ranges.json が見つかりません。AI生成で代用します。")
 
 
 # --------------------------------------------------------------
@@ -76,9 +74,9 @@ merged = (
 merged["disease_date"] = pd.to_datetime(merged["disease_date"], errors="coerce")
 print(f"🧩 統合データ件数: {len(merged):,}")
 
-# ✅ 動作確認モード（まずは500件で試す）
-merged = merged.sample(n=500, random_state=42)
-print(f"🔍 サンプリング後件数: {len(merged):,}")
+# テストモードで制限
+merged = merged.sample(n=200, random_state=42)
+print(f"🔍 サンプルデータ件数: {len(merged):,}")
 
 
 # --------------------------------------------------------------
@@ -86,10 +84,8 @@ print(f"🔍 サンプリング後件数: {len(merged):,}")
 # --------------------------------------------------------------
 @lru_cache(maxsize=None)
 def get_tests_from_gemini_cached(disease, drug, gender="不明"):
-    """疾患×薬剤×性別の組合せに対して1度だけGemini呼び出し"""
     if not USE_GEMINI:
         return tuple()
-
     try:
         prompt = f"""
 疾患「{disease}」と薬剤「{drug}」を使用している{gender}の患者に対して、
@@ -114,70 +110,62 @@ def generate_value_and_unit(test_name):
         mean = info.get("mean", 1)
         sd = info.get("sd", 0.1)
         unit = info.get("unit", "")
-        value = np.round(np.random.normal(mean, sd), 2)
-        return value, unit
-
-    return np.round(np.random.uniform(0.1, 10.0), 2), ""
+        return round(np.random.normal(mean, sd), 2), unit
+    return round(np.random.uniform(0.1, 10.0), 2), ""
 
 
 # --------------------------------------------------------------
-# 並列処理関数
+# 小バッチ処理
 # --------------------------------------------------------------
-def process_row(row):
-    disease = row.get("disease_name", "")
-    drug = row.get("drug_name", "")
-    gender = row.get("gender", "不明")
-    patient_id = row["patient_id"]
-    results = []
-
-    tests = get_tests_from_gemini_cached(disease, drug, gender)
-    if len(tests) == 0:
-        return results
-
-    disease_date = row["disease_date"]
-    if pd.isna(disease_date):
-        return results
-
-    inspection_date = disease_date + timedelta(days=int(np.random.choice([-1, 0, 1])))
-    encounter_id = f"{patient_id}_{inspection_date.strftime('%Y%m%d')}"
-
-    for test_name in tests:
-        value, unit = generate_value_and_unit(test_name)
-        results.append({
-            "patient_id": patient_id,
-            "encounter_id": encounter_id,
-            "disease_name": disease,
-            "drug_name": drug,
-            "inspection_name": test_name,
-            "inspection_value": value,
-            "unit": unit,
-            "inspection_date": inspection_date.strftime("%Y-%m-%d"),
-        })
-    return results
-
-
-# --------------------------------------------------------------
-# 並列処理実行
-# --------------------------------------------------------------
+BATCH_SIZE = 5
 out_rows = []
-print("🚀 並列処理を開始します...")
-
-with ThreadPoolExecutor(max_workers=5) as executor:
-    futures = [executor.submit(process_row, row) for _, row in merged.iterrows()]
-    for f in as_completed(futures):
-        try:
-            out_rows.extend(f.result())
-        except Exception as e:
-            print("⚠️ 並列処理エラー:", e)
-
-# --------------------------------------------------------------
-# 出力
-# --------------------------------------------------------------
-out_df = pd.DataFrame(out_rows)
+total = len(merged)
 now_str = datetime.now().strftime("%Y%m%d_%H%M")
-out_path = f"{OUTPUT_DIR}/inspection_generated_parallel_{now_str}.csv"
-out_df.to_csv(out_path, index=False)
 
-print(f"💾 出力完了: {out_path}")
-print(f"🧾 生成件数: {len(out_df):,}")
-print("🎉 処理が完了しました！")
+for i in range(0, total, BATCH_SIZE):
+    batch = merged.iloc[i:i+BATCH_SIZE]
+    print(f"🚀 バッチ {i//BATCH_SIZE+1}: {len(batch)} 件処理中...")
+
+    for _, row in batch.iterrows():
+        disease = row.get("disease_name", "")
+        drug = row.get("drug_name", "")
+        gender = row.get("gender", "不明")
+        patient_id = row["patient_id"]
+
+        tests = get_tests_from_gemini_cached(disease, drug, gender)
+        if len(tests) == 0:
+            continue
+
+        disease_date = row["disease_date"]
+        if pd.isna(disease_date):
+            continue
+
+        inspection_date = disease_date + timedelta(days=int(np.random.choice([-1, 0, 1])))
+        encounter_id = f"{patient_id}_{inspection_date.strftime('%Y%m%d')}"
+
+        for test_name in tests:
+            value, unit = generate_value_and_unit(test_name)
+            out_rows.append({
+                "patient_id": patient_id,
+                "encounter_id": encounter_id,
+                "disease_name": disease,
+                "drug_name": drug,
+                "inspection_name": test_name,
+                "inspection_value": value,
+                "unit": unit,
+                "inspection_date": inspection_date.strftime("%Y-%m-%d"),
+            })
+
+    # バッチごとに保存
+    if i % (BATCH_SIZE * 5) == 0 and len(out_rows) > 0:
+        out_df = pd.DataFrame(out_rows)
+        out_path = f"{OUTPUT_DIR}/inspection_partial_{now_str}.csv"
+        out_df.to_csv(out_path, index=False)
+        print(f"💾 部分保存: {out_path} ({len(out_rows):,}件)")
+        time.sleep(1)  # API負荷軽減
+
+print("✅ 全処理完了！")
+out_df = pd.DataFrame(out_rows)
+out_path = f"{OUTPUT_DIR}/inspection_generated_final_{now_str}.csv"
+out_df.to_csv(out_path, index=False)
+print(f"🎉 出力完了: {out_path} / {len(out_df):,}件")
