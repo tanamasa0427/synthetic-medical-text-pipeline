@@ -50,7 +50,7 @@ disease_df = load_csv("disease.csv")
 drug_df = load_csv("drug.csv")
 
 # clinical schema（encounter構造）
-with open(f"{INPUT_DIR}/clinical_schema_v1.2.json", "r") as f:
+with open(f"{BASE_DIR}/data/schema/clinical_schema_v1.2.json", "r") as f:
     schema = json.load(f)
 
 # 検査値分布
