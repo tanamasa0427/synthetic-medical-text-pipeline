@@ -1,7 +1,6 @@
 # ==============================================================
-# 04_generate_inspection_with_gemini_batch_v25.py
-# Gemini 2.5 (v1 API対応) を使った大規模検査データ自動生成
-# バッチ処理で安定動作する改良版
+# 04_generate_inspection_with_gemini_parallel_v25.py
+# Gemini 2.5対応：並列処理＋キャッシュ＋サンプリング安定版
 # ==============================================================
 
 import os
@@ -9,23 +8,18 @@ import json
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 
 # --------------------------------------------------------------
-# Gemini 初期化（v1対応）
+# Gemini 初期化
 # --------------------------------------------------------------
 USE_GEMINI = True
 try:
     import google.generativeai as genai
-
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-
-    # ✅ 最新モデル（精度重視）
     model = genai.GenerativeModel(model_name="models/gemini-2.5-pro")
-    # model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")  # 高速化したい場合はこちら
-
     print("✅ Geminiモデル読み込み完了")
-
 except Exception as e:
     print("⚠️ Gemini初期化に失敗:", e)
     USE_GEMINI = False
@@ -39,32 +33,26 @@ INPUT_DIR = f"{BASE_DIR}/data/inputs"
 OUTPUT_DIR = f"{INPUT_DIR}/outputs"
 SCHEMA_PATH = f"{BASE_DIR}/data/schema/clinical_schema_v1.2.json"
 VALUE_RANGES_PATH = f"{BASE_DIR}/data/schema/value_ranges.json"
-
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # --------------------------------------------------------------
-# データ読み込み関数
+# CSV読み込み
 # --------------------------------------------------------------
 def load_csv(name):
-    """CSVをロードして情報を表示"""
     path = f"{INPUT_DIR}/{name}"
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"❌ {path} が存在しません。")
     df = pd.read_csv(path)
     print(f"✅ {name}: {len(df):,}件, 列: {list(df.columns)}")
     return df
 
 
-# --------------------------------------------------------------
-# 入力データの読み込み
-# --------------------------------------------------------------
 gender_df = load_csv("gender.csv")
 disease_df = load_csv("disease.csv")
 drug_df = load_csv("drug.csv")
 
+
 # --------------------------------------------------------------
-# スキーマ・検査値範囲ファイル読み込み
+# スキーマ読み込み
 # --------------------------------------------------------------
 with open(SCHEMA_PATH, "r") as f:
     schema = json.load(f)
@@ -74,8 +62,9 @@ if os.path.exists(VALUE_RANGES_PATH):
     with open(VALUE_RANGES_PATH, "r") as f:
         value_ranges = json.load(f)
 else:
-    value_ranges = {}
     print("⚠️ value_ranges.json が見つかりません。AI生成で代用します。")
+    value_ranges = {}
+
 
 # --------------------------------------------------------------
 # データ統合
@@ -85,38 +74,41 @@ merged = (
     .merge(gender_df, on="patient_id", how="left")
 )
 merged["disease_date"] = pd.to_datetime(merged["disease_date"], errors="coerce")
-merged["key_date"] = pd.to_datetime(merged["key_date"], errors="coerce")
 print(f"🧩 統合データ件数: {len(merged):,}")
 
+# ✅ 動作確認モード（まずは500件で試す）
+merged = merged.sample(n=500, random_state=42)
+print(f"🔍 サンプリング後件数: {len(merged):,}")
+
+
 # --------------------------------------------------------------
-# Geminiで検査候補を推定
+# Gemini呼び出し（キャッシュ付き）
 # --------------------------------------------------------------
-def get_tests_from_gemini(disease, drug, gender="不明"):
-    """疾患・薬剤・性別をもとに関連検査項目をGeminiで推定"""
+@lru_cache(maxsize=None)
+def get_tests_from_gemini_cached(disease, drug, gender="不明"):
+    """疾患×薬剤×性別の組合せに対して1度だけGemini呼び出し"""
     if not USE_GEMINI:
-        return []
+        return tuple()
 
     try:
         prompt = f"""
 疾患「{disease}」と薬剤「{drug}」を使用している{gender}の患者に対して、
 臨床的に関連性の高い検査項目を3つ挙げてください。
-一般的な検査名（例：HbA1c, eGFR, AST, LDL-Cなど）で出力してください。
 日本語または英語の検査名をカンマ区切りで短く返してください。
 """
         response = model.generate_content([prompt])
         text = response.text.strip().replace("\n", "").replace("、", ",")
         tests = [t.strip() for t in text.split(",") if len(t.strip()) > 0]
-        return tests[:5]
+        return tuple(tests[:5])
     except Exception as e:
         print("⚠️ Gemini呼び出し失敗:", e)
-        return []
+        return tuple()
 
 
 # --------------------------------------------------------------
-# 検査値生成（既知分布 or AI推定）
+# 検査値生成
 # --------------------------------------------------------------
 def generate_value_and_unit(test_name):
-    """検査項目名に基づいて値と単位を生成"""
     if test_name in value_ranges:
         info = value_ranges[test_name]
         mean = info.get("mean", 1)
@@ -125,81 +117,67 @@ def generate_value_and_unit(test_name):
         value = np.round(np.random.normal(mean, sd), 2)
         return value, unit
 
-    if USE_GEMINI:
-        try:
-            prompt = f"検査「{test_name}」の正常範囲と単位を簡潔に1行で教えてください。"
-            res = model.generate_content([prompt])
-            text = res.text.strip()
-            unit = ""
-            for token in ["mg/dL", "mmol/L", "U/L", "%", "mL/min", "g/dL"]:
-                if token in text:
-                    unit = token
-            value = np.random.normal(1, 0.1)
-            return round(float(abs(value)), 2), unit
-        except:
-            pass
-
-    # フォールバック
     return np.round(np.random.uniform(0.1, 10.0), 2), ""
 
 
 # --------------------------------------------------------------
-# バッチ処理設定
+# 並列処理関数
 # --------------------------------------------------------------
-BATCH_SIZE = 1000   # ⚙️ 適宜調整（Colabなら 500〜2000 件が安全）
-total = len(merged)
-num_batches = (total // BATCH_SIZE) + 1
+def process_row(row):
+    disease = row.get("disease_name", "")
+    drug = row.get("drug_name", "")
+    gender = row.get("gender", "不明")
+    patient_id = row["patient_id"]
+    results = []
 
-print(f"📦 総データ件数: {total:,} / バッチ数: {num_batches:,}")
+    tests = get_tests_from_gemini_cached(disease, drug, gender)
+    if len(tests) == 0:
+        return results
+
+    disease_date = row["disease_date"]
+    if pd.isna(disease_date):
+        return results
+
+    inspection_date = disease_date + timedelta(days=int(np.random.choice([-1, 0, 1])))
+    encounter_id = f"{patient_id}_{inspection_date.strftime('%Y%m%d')}"
+
+    for test_name in tests:
+        value, unit = generate_value_and_unit(test_name)
+        results.append({
+            "patient_id": patient_id,
+            "encounter_id": encounter_id,
+            "disease_name": disease,
+            "drug_name": drug,
+            "inspection_name": test_name,
+            "inspection_value": value,
+            "unit": unit,
+            "inspection_date": inspection_date.strftime("%Y-%m-%d"),
+        })
+    return results
+
 
 # --------------------------------------------------------------
-# バッチ処理本体
+# 並列処理実行
 # --------------------------------------------------------------
-for batch_idx, start in enumerate(range(0, total, BATCH_SIZE)):
-    end = min(start + BATCH_SIZE, total)
-    batch = merged.iloc[start:end]
-    print(f"\n🚀 バッチ {batch_idx+1}/{num_batches} 実行中 ({start:,}〜{end:,}) 件...")
+out_rows = []
+print("🚀 並列処理を開始します...")
 
-    out_rows = []
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = [executor.submit(process_row, row) for _, row in merged.iterrows()]
+    for f in as_completed(futures):
+        try:
+            out_rows.extend(f.result())
+        except Exception as e:
+            print("⚠️ 並列処理エラー:", e)
 
-    for i, row in batch.iterrows():
-        disease = row.get("disease_name", "")
-        drug = row.get("drug_name", "")
-        gender = row.get("gender", "不明")
-        patient_id = row["patient_id"]
+# --------------------------------------------------------------
+# 出力
+# --------------------------------------------------------------
+out_df = pd.DataFrame(out_rows)
+now_str = datetime.now().strftime("%Y%m%d_%H%M")
+out_path = f"{OUTPUT_DIR}/inspection_generated_parallel_{now_str}.csv"
+out_df.to_csv(out_path, index=False)
 
-        tests = get_tests_from_gemini(disease, drug, gender)
-        if len(tests) == 0:
-            continue
-
-        disease_date = row["disease_date"]
-        if pd.isna(disease_date):
-            continue
-
-        inspection_date = disease_date + timedelta(days=int(np.random.choice([-1, 0, 1])))
-        encounter_id = f"{patient_id}_{inspection_date.strftime('%Y%m%d')}"
-
-        for test_name in tests:
-            value, unit = generate_value_and_unit(test_name)
-            out_rows.append({
-                "patient_id": patient_id,
-                "encounter_id": encounter_id,
-                "disease_name": disease,
-                "drug_name": drug,
-                "inspection_name": test_name,
-                "inspection_value": value,
-                "unit": unit,
-                "inspection_date": inspection_date.strftime("%Y-%m-%d"),
-            })
-
-    # バッチ結果を保存
-    out_df = pd.DataFrame(out_rows)
-    now_str = datetime.now().strftime("%Y%m%d_%H%M")
-    out_path = f"{OUTPUT_DIR}/inspection_generated_batch_{batch_idx+1}_{now_str}.csv"
-    out_df.to_csv(out_path, index=False)
-    print(f"💾 バッチ {batch_idx+1} 出力完了: {out_path} / 件数: {len(out_df):,}")
-
-    # ✅ API負荷を軽減
-    time.sleep(2)
-
-print("🎉 すべてのバッチ処理が完了しました！")
+print(f"💾 出力完了: {out_path}")
+print(f"🧾 生成件数: {len(out_df):,}")
+print("🎉 処理が完了しました！")
